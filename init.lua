@@ -1,39 +1,26 @@
 local load_time_start = os.clock()
 
 
-math.randomseed(os.time())
+-- mts schematics at https://forum.minetest.net/viewtopic.php?p=193593#p193593
 
-function os_path_join(parts)
-        return table.concat(parts, package.config:sub(1,1))
-end
+assert(minetest.get_modpath, "[villages_ironzorg] This mod is not longer supposed to support old versions.")
 
-if minetest.get_modpath ~= nil then
-          dofile(os_path_join({minetest.get_modpath('villages'), 'buildings.lua'}))
-else
-        print('[VILLAGES] Your version of minetest doesnt support get_modpath, launch the game from the main directory')
-        require('data/mods/villages/buildings')
-end
+local minetest = minetest
+
+local BUILDINGS = dofile(minetest.get_modpath("villages_ironzorg").."/buildings.lua")
 
 local MAX_RATIO = 1000
 
 -- Utils functions
 local print_vector = function(pos)
-	print('(' .. pos.x
-		.. ', ' .. pos.y
-		.. ', ' .. pos.z .. ')')
+	print("(" .. pos.x .. ", " .. pos.y .. ", " .. pos.z .. ")")
 end
 
 local vector_le = function(pos1, pos2)
 	return (pos1.x <= pos2.x) and (pos1.y <= pos2.y) and (pos1.z <= pos2.z)
 end
 
-local vector_add = function(pos1, pos2)
-	return {
-		x = pos1.x + pos2.x,
-		y = pos1.y + pos2.y,
-		z = pos1.z + pos2.z,
-	}
-end
+local vector_add = vector.add
 
 local table_contains = function(t, v)
 	for _, i in ipairs(t) do
@@ -56,12 +43,12 @@ local building_fits = function(building, min_pos, max_pos)
 		for i = 0, building.size.y do
 			for j = 0, building.size.x do
 				for k = 0, building.size.z do
-					local node = minetest.env:get_node({
-						x = min_pos.x + j + 0,
+					local node = minetest.get_node({
+						x = min_pos.x + j,
 						y = min_pos.y + i + ry,
-						z = min_pos.z + k + 0,
+						z = min_pos.z + k,
 					})
-					if (node.name ~= 'air') then
+					if (node.name ~= "air") then
 						if ry == max_rad_y - 1 then
 							return nil
 						else
@@ -86,23 +73,25 @@ local building_fits = function(building, min_pos, max_pos)
 	}
 end
 
-
-local place_building = function(building, building_pos)
-	for i = 0, building.size.x - 1 do
+local replacements = {
+	tree = "default:tree",
+	wood = "default:wood",
+	mossycobble = "default:mossycobble",
+	cobble = "default:cobble",
+	glass = "default:glass",
+}
+local function place_building(building, building_pos)
+	for i = 0, building.size.z - 1 do
+		local pos = {z = building_pos.z + i}
 		for j = 0, building.size.y - 1 do
-			for k = 0, building.size.z - 1 do
-				local pos = {
-					x = building_pos.x + i,
-					y = building_pos.y + j,
-					z = building_pos.z + k,
-				}
-				local node = building.structure[j + 1][k + 1][i + 1]
+			pos.y = building_pos.y + j
+			for k = 0, building.size.x - 1 do
+				pos.x = building_pos.x + k
+				local node = building.structure[j + 1][i + 1][k + 1]
 
-				if node ~= nil then
-					minetest.env:remove_node(pos)
-					minetest.env:add_node(pos, {
-						name = node
-					})
+				if node then
+					node = replacements[node] or node
+					minetest.set_node(pos, {name = node})
 				end
 			end
 		end
@@ -115,14 +104,14 @@ local count_blocks = function(blocks, pos1, pos2)
 	for i = pos1.x, pos2.x do
 		for j = pos1.y, pos2.y do
 			for k = pos1.z, pos2.z do
-				local node = minetest.env:get_node_or_nil({
+				local node = minetest.get_node_or_nil({
 					x = i,
 					y = j,
 					z = k,
 				})
 
-				if (node ~= nil)
-					and table_contains(blocks, node.name) then
+				if node
+				and table_contains(blocks, node.name) then
 					n = n + 1
 				end
 			end
@@ -135,17 +124,16 @@ end
 local has_building_ground = function(building, pos1)
 	for i = 0, building.size.x - 1 do
 		for j = 0, building.size.z - 1 do
-			local node = minetest.env:get_node_or_nil({
+			local node = minetest.get_node_or_nil({
 				x = pos1.x + i,
 				y = pos1.y,
 				z = pos1.z + j,
 			})
 
-			if (node ~= nil) then
-				if (table_contains(building.building_surfaces, node.name) == false)
-					and (building.structure[1][j + 1][i + 1] ~= nil) then
-					return false
-				end
+			if node
+			and not table_contains(building.building_surfaces, node.name)
+			and building.structure[1][j + 1][i + 1] then
+				return false
 			end
 		end
 	end
@@ -153,19 +141,15 @@ local has_building_ground = function(building, pos1)
 	return true
 end
 
-minetest.register_on_generated(function(min_pos, max_pos)
-	local diff_pos = {
-		x = max_pos.x - min_pos.x,
-		y = max_pos.y - min_pos.y,
-		z = max_pos.z - min_pos.z,
-	}
+minetest.register_on_generated(function(minp, maxp)
+	local diff_pos = vector.subtract(maxp, minp)
 
 	for _, building in ipairs(BUILDINGS) do
 		if vector_le(building.size, diff_pos) then
-			local building_pos = building_fits(building, min_pos, max_pos)
+			local building_pos = building_fits(building, minp, maxp)
 
-			if (building_pos ~= nil)
-				and (math.random(1, MAX_RATIO) < building.odds) then
+			if building_pos
+			and math.random(1, MAX_RATIO) < building.odds then
 				local v1 = vector_add(building_pos, {
 					x = 0,
 					y = -1,
@@ -173,16 +157,29 @@ minetest.register_on_generated(function(min_pos, max_pos)
 				})
 
 				if has_building_ground(building, v1) then
-					print('Placing building ' .. building.name .. ': ')
+					print("Placing building " .. building.name .. ": ")
 					print_vector(building_pos)
 					place_building(building, building_pos)
 					-- One building per chunk
-					break
+					return
 				end
 			end
 		end
 	end
 end)
+
+minetest.register_chatcommand("spawn_building",{
+	description = "",
+	params = "",
+	privs = {server=true},
+	func = function(name, param)
+		param = BUILDINGS[tonumber(param)]
+		if not param then
+			return
+		end
+		place_building(param, vector.round(minetest.get_player_by_name(name):getpos()))
+	end
+})
 
 
 local time = math.floor(tonumber(os.clock()-load_time_start)*100+0.5)/100
